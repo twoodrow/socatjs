@@ -12,7 +12,7 @@ Usage:  socat.js <connection1> <connection2>
         socat.js <connection1> <connection2> [sniff1]
         socat.js <connection1> <connection2> [sniff1] [sniff2]
 
-"connection1" and "connection2" are specified by a string of the form "type:details".
+Where "connection1" and "connection2" are specified by a string of the form "type:details".
 Below are valid strings for "type" and "details":
     <type>      <details>
     ipclient    host:port
@@ -25,6 +25,9 @@ are specified by a string, like the connections, of the form: "conn:type:details
     <conn>      <type>      <details>
     1           as above    as above
     2
+
+
+
 `);
     process.exit(exitCode);
 }
@@ -199,6 +202,10 @@ class SerialConnection extends Connection {
         let connection = initialize_serialport(this.buffer, portname, baudrate);
         this.connection = connection;
     }
+
+    get canWrite() {
+        return true;
+    }
 }
 
 
@@ -207,37 +214,55 @@ class SerialConnection extends Connection {
 ////////////////////////////////////
 function createSniffConnection1(args)
 {
+    console.log(`sniff1 args: ${JSON.stringify(args)}`);
 
+    let connection = createSniffConnection(args, 1);
+    return connection;
 }
 
 
 function createSniffConnection2(args)
 {
+    console.log(`sniff2 args: ${JSON.stringify(args)}`);
 
+    let connection = createSniffConnection(args, 2);
+    return connection;
 }
 
 
-function createConnection(connection_type, connection_details)
+function createSniffConnection(args, connection_num)
 {
+    args.forEach(arg => {
+        let arg_arr = arg.split(":");
+        if (arg_arr[0] == connection_num)
+            return createConnection(arg.slice(2));
+    });
+
+    return null;
+}
+
+
+function createConnection(connection_argument)
+{
+    let args = connection_argument.split(":");
+    let connection_type = args[0];
+    let detail_arr = args.slice(1);
+
     let connection;
-    let detail_arr;
 
     switch (connection_type)
     {
         case "ipclient":
-            detail_arr = connection_details.split(":");
             let clienthost = detail_arr[0];
             let clientport = parseInt(detail_arr[1]);
             connection = new IpClientConnection(clienthost, clientport);
             break;
         case "ipserver":
-            detail_arr = connection_details.split(":");
             let serverhost = detail_arr[0];
             let serverport = parseInt(detail_arr[1]);
             connection = new IpServerConnection(serverhost, serverport);
             break;
         case "serial":
-            detail_arr = connection_details.split(":");
             let portname = detail_arr[0];
             let baudrate = parseInt(detail_arr[1]);
             connection = new SerialConnection(portname, baudrate);
@@ -255,18 +280,35 @@ function createConnection(connection_type, connection_details)
 function argSanityCheck(args)
 {
     const connection_types = ["serial", "ipserver", "ipclient"];
+    //console.log(`Arguments provided: ${JSON.stringify(args)}`);
     
-    if (args.length < 4)
+    if (args.length < 2)
     {
-        console.log(`ERROR -- You must have at least 4 arguments. You supplied ${args.length} arguments.`);
+        console.log(`ERROR -- You must have at least 2 arguments. You supplied ${args.length} arguments.`);
         printUsageAndExit(1);
     }
 
-    if (connection_types.indexOf(args[0]) < 0)
+    // get individual information
+    let arg0 = args[0].split(":");
+    let arg1 = args[1].split(":");
+
+    //console.log(`arg0 was: ${JSON.stringify(arg0)}`);
+
+    if (connection_types.indexOf(arg0[0]) < 0)
     {
-        console.log(`ERROR -- Invalid connection type: "${args[0]}"`);
+        console.log(`ERROR -- Invalid connection type: "${arg0[0]}"`);
         printUsageAndExit(1);
     }
+    
+    if (connection_types.indexOf(arg1[0]) < 0)
+    {
+        console.log(`ERROR -- Invalid connection type: "${arg1[0]}"`);
+        printUsageAndExit(1);
+    }
+
+    // check no IP port collisions
+    // check no serial port collisions
+    // check sniff connections have correct numerals
 }
 
 
@@ -274,10 +316,10 @@ function parseArgsToConnections(args)
 {
     argSanityCheck(args);
 
-    let conn1 = createConnection(args[0], args[1]);
-    let conn2 = createConnection(args[2], args[3]);
-    let sniff1 = createSniffConnection1(args);
-    let sniff2 = createSniffConnection2(args);
+    let conn1 = createConnection(args[0]);
+    let conn2 = createConnection(args[1]);
+    let sniff1 = createSniffConnection1(args.slice(2));
+    let sniff2 = createSniffConnection2(args.slice(2));
 
     return [conn1, conn2, sniff1, sniff2];
 }
@@ -289,12 +331,26 @@ function mainLoop(conn1, conn2, sniffConn1 = null, sniffConn2 = null)
         if (conn1.hasBytes)
         {
             conn2.write(conn1.bytes);
+
+            if (sniffConn1 != null)
+            {
+                if (sniffConn1.canWrite)
+                    sniffConn1.write(conn1.bytes);
+            }
+
             conn1.resetBuffer();
         }
         
         if (conn2.hasBytes)
         {
             conn1.write(conn2.bytes);
+            
+            if (sniffConn2 != null)
+            {
+                if (sniffConn2.canWrite)
+                    sniffConn2.write(conn2.bytes);
+            }
+
             conn2.resetBuffer();
         }
     }
@@ -311,7 +367,7 @@ let argv = require('minimist')(process.argv.slice(2));
 let noArgs = (JSON.stringify(argv) == JSON.stringify({_: []}));
 if (noArgs)
 {
-    console.log("Argument must be provided.\n");
+    console.log("ERROR -- Arguments must be provided.");
     printUsageAndExit(1);
 }
 else
@@ -319,6 +375,8 @@ else
     let conn_list = parseArgsToConnections(argv._); 
     let conn1 = conn_list[0];
     let conn2 = conn_list[1];
+    let sniff1 = conn_list[2];
+    let sniff2 = conn_list[3];
 
-    mainLoop(conn1, conn2);
+    mainLoop(conn1, conn2, sniff1, sniff2);
 }

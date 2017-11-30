@@ -19,6 +19,6 @@
   },
   "homepage": "https://github.com/latitudeengineering/socatjs",
   "dependencies": {
-    "serialport": "6.0.4",
+    "serialport": "6.0.4"
   }
 }

@@ -65,14 +65,11 @@ function initialize_serialport(serial_in, com_port, baud_rate) {
 }
 
 
-function initialize_socket(ip_socket, ip_in) {
+function initialize_socket(host, port, onData) {
     console.log("initializing socket..");
-    ip_socket = net.Socket();
+    let ip_socket = net.Socket();
     ip_socket.setEncoding("binary");
-    ip_socket.on("data", (data) => {
-        ip_in = Buffer.concat([ip_in, Buffer.from(data, "binary")]);
-		console.log(`received IP: ${ip_in.length} bytes`);
-    });
+    ip_socket.on("data", onData);
     ip_socket.on("connect", () => {
         console.log("socket connect");
     });
@@ -86,34 +83,13 @@ function initialize_socket(ip_socket, ip_in) {
         console.log("socket error");
         console.dir(args);
     });
+
+    return ip_socket;
 }
 
 
-function initialize_server(buffer, host, port) {
-    let server_obj = {};
-    server_obj["client"] = null;
-
-    let server = new net.createServer((socket) => {
-        server_obj["client"] = socket;
-        socket.on("data", (data) => {
-            buffer = Buffer.concat([buffer, Buffer.from(data, "binary")]);
-            console.log(`received IP: ${buffer.length} bytes`);
-        });
-        socket.on("connect", () => {
-            console.log("server socket connect");
-        });
-        socket.on("close", () => {
-            console.log("server socket close");
-        });
-        socket.on("end", () => {
-            console.log("server socket end");
-        });
-        socket.on("error", (args) => {
-            console.log("server socket error");
-            console.dir(args);
-        });
-    });
-    server_obj["server"] = server;
+function initialize_server(host, port, onSocket) {
+    let server = new net.createServer(onSocket);
 
     // setup event handling
     server.on("error", (e) => {
@@ -135,7 +111,7 @@ function initialize_server(buffer, host, port) {
         backlog: 1
     });
 
-    return server_obj;
+    return server;
 }
 
 
@@ -151,22 +127,47 @@ class Connection {
         this.buffer = Buffer.alloc(0,0,"binary");
     }
     get hasBytes() {
+        //console.log(`have ${this.buffer.length} bytes`);
         return 0 < this.buffer.length;
     }
     get canWrite() { return false; }
+
+    get bytes() { return this.buffer; }
 }
 
 
 class IpServerConnection extends Connection {
     constructor(host, port) {
         super();
-        let connection = initialize_server(this.buffer, host, port);
-        this.server = connection["server"];
         this.connection = null;
+        let server = initialize_server(host, port, (socket) => {
+            this.connection = socket;
+            console.log(`socket opened for ${host}:${port}`);
+            socket.on("data", (data) => {
+                this.buffer = Buffer.concat([this.buffer, Buffer.from(data, "binary")]);
+                //console.log(`received data on ${host}:${port} -- ${this.buffer.length} bytes`);
+            });
+            socket.on("connect", () => {
+                console.log("server socket connect");
+            });
+            socket.on("close", () => {
+                console.log("server socket close");
+            });
+            socket.on("end", () => {
+                console.log("server socket end");
+            });
+            socket.on("error", (args) => {
+                console.log("server socket error");
+                console.dir(args);
+            });
+        });
+        this.server = server;
     }
 
     write(buffer) {
-        this.connection.write(buffer, "binary");
+        //console.log("attempting server socket write...");
+        if (this.connection != null)
+            this.connection.write(buffer, "binary");
     }
 
     get canWrite() {
@@ -181,8 +182,11 @@ class IpServerConnection extends Connection {
 class IpClientConnection extends Connection {
     constructor(host, port) {
         super();
-        let connection;
-        initialize_socket(connection, this.buffer);
+        let connection = initialize_socket(host, port,
+            (data) => {
+                this.buffer = Buffer.concat([this.buffer, Buffer.from(data, "binary")]);
+                //console.log(`received data on ${host}:${port} -- ${this.buffer.length} bytes`);
+        });
         connection.connect({port: port, host: host});
         this.connection = connection;
     }
@@ -192,6 +196,11 @@ class IpClientConnection extends Connection {
             return false;
         else
             return true;
+    }
+
+    write(buffer) {
+        //console.log("attempting client socket write...");
+        this.connection.write(buffer, "binary");
     }
 }
 
@@ -214,29 +223,33 @@ class SerialConnection extends Connection {
 ////////////////////////////////////
 function createSniffConnection1(args)
 {
-    console.log(`sniff1 args: ${JSON.stringify(args)}`);
+    //console.log(`sniff1 args: ${JSON.stringify(args)}`);
 
     let connection = createSniffConnection(args, 1);
+    //console.log(`connection1 is: ${connection}`);
     return connection;
 }
 
 
 function createSniffConnection2(args)
 {
-    console.log(`sniff2 args: ${JSON.stringify(args)}`);
+    //console.log(`sniff2 args: ${JSON.stringify(args)}`);
 
     let connection = createSniffConnection(args, 2);
+    //console.log(`connection2 is: ${connection}`);
     return connection;
 }
 
 
 function createSniffConnection(args, connection_num)
 {
-    args.forEach(arg => {
-        let arg_arr = arg.split(":");
+    let L = args.length;
+    for (let i = 0; i < L; i++)
+    {
+        let arg_arr = args[i].split(":");
         if (arg_arr[0] == connection_num)
-            return createConnection(arg.slice(2));
-    });
+            return createConnection(args[i].slice(2));
+    }
 
     return null;
 }
@@ -247,6 +260,8 @@ function createConnection(connection_argument)
     let args = connection_argument.split(":");
     let connection_type = args[0];
     let detail_arr = args.slice(1);
+
+    //console.log(`createConnection arg: ${connection_argument}`)
 
     let connection;
 
@@ -325,30 +340,38 @@ function parseArgsToConnections(args)
 }
 
 
-function mainLoop(conn1, conn2, sniffConn1 = null, sniffConn2 = null)
+function mainLoop(conn1, conn2, sniffConn1, sniffConn2)
 {
     function loop() {
-        if (conn1.hasBytes)
+        if (conn1.hasBytes && conn2.canWrite)
         {
+            //console.log("conn1 has bytes!");
             conn2.write(conn1.bytes);
 
             if (sniffConn1 != null)
             {
                 if (sniffConn1.canWrite)
+                {
+                    //console.log(`wring to sniffer1`);
                     sniffConn1.write(conn1.bytes);
+                }
             }
 
             conn1.resetBuffer();
         }
         
-        if (conn2.hasBytes)
+        if (conn2.hasBytes && conn1.canWrite)
         {
+            //console.log("conn2 has bytes!");
             conn1.write(conn2.bytes);
             
             if (sniffConn2 != null)
             {
                 if (sniffConn2.canWrite)
+                {
+                    //console.log(`wring to sniffer2`);
                     sniffConn2.write(conn2.bytes);
+                }
             }
 
             conn2.resetBuffer();
@@ -372,11 +395,14 @@ if (noArgs)
 }
 else
 {
-    let conn_list = parseArgsToConnections(argv._); 
+    let conn_list = parseArgsToConnections(argv._);
+
     let conn1 = conn_list[0];
     let conn2 = conn_list[1];
     let sniff1 = conn_list[2];
     let sniff2 = conn_list[3];
+    
+    //console.dir(conn_list);
 
     mainLoop(conn1, conn2, sniff1, sniff2);
 }

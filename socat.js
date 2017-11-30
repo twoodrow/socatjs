@@ -44,7 +44,7 @@ function initialize_serialport(serial_in, com_port, baud_rate) {
 
     serial_port.on("data", (buf) => {
         serial_in = Buffer.concat([serial_in, Buffer.from(buf, "binary")]);
-		console.log(`received serial: ${serial_in.length} bytes`);
+		//console.log(`received serial: ${serial_in.length} bytes`);
     });
     serial_port.on("open", () => {
         console.log("serialport open");
@@ -65,7 +65,7 @@ function initialize_serialport(serial_in, com_port, baud_rate) {
 }
 
 
-function initialize_socket(host, port, onData) {
+function initialize_socket(host, port, onData, onConnect, onClose) {
     console.log("initializing socket..");
     let ip_socket = net.Socket();
     ip_socket.setEncoding("binary");
@@ -140,8 +140,10 @@ class IpServerConnection extends Connection {
     constructor(host, port) {
         super();
         this.connection = null;
+        this.connectionOpen = false;
         let server = initialize_server(host, port, (socket) => {
             this.connection = socket;
+            this.connectionOpen = true;
             console.log(`socket opened for ${host}:${port}`);
             socket.on("data", (data) => {
                 this.buffer = Buffer.concat([this.buffer, Buffer.from(data, "binary")]);
@@ -149,8 +151,10 @@ class IpServerConnection extends Connection {
             });
             socket.on("connect", () => {
                 console.log("server socket connect");
+                this.connectionOpen = true;
             });
             socket.on("close", () => {
+                this.connectionOpen = false;
                 console.log("server socket close");
             });
             socket.on("end", () => {
@@ -171,7 +175,12 @@ class IpServerConnection extends Connection {
     }
 
     get canWrite() {
-        if (this.connection == null)
+        /*
+        console.log(`SERVER
+    connection: ${this.connection}
+    connectionOpen: ${this.connectionOpen}`);
+    */
+        if (this.connection == null || this.connectionOpen == false)
             return false;
         else
             return true;
@@ -182,17 +191,40 @@ class IpServerConnection extends Connection {
 class IpClientConnection extends Connection {
     constructor(host, port) {
         super();
-        let connection = initialize_socket(host, port,
-            (data) => {
-                this.buffer = Buffer.concat([this.buffer, Buffer.from(data, "binary")]);
-                //console.log(`received data on ${host}:${port} -- ${this.buffer.length} bytes`);
+        this.connectionOpen = false;
+        let connection = net.Socket();
+        connection.setEncoding("binary");
+        connection.on("data", (data) => {
+            this.buffer = Buffer.concat([this.buffer, Buffer.from(data, "binary")]);
+            //console.log(`received data on ${host}:${port} -- ${this.buffer.length} bytes`);
         });
+        connection.on("connect", () => {
+            console.log("socket connect");
+            this.connectionOpen = true;
+        });
+        connection.on("close", () => {
+            console.log("socket close");
+            this.connectionOpen = false;
+        });
+        connection.on("end", () => {
+            console.log("socket end");
+        });
+        connection.on("error", (args) => {
+            console.log("socket error");
+            console.dir(args);
+        });
+
         connection.connect({port: port, host: host});
         this.connection = connection;
     }
     
     get canWrite() {
-        if (this.connection == null)
+        /*
+        console.log(`CLIENT
+    connection: ${this.connection}
+    connectionOpen: ${this.connectionOpen}`);
+    */
+        if (this.connection == null || this.connectionOpen == false)
             return false;
         else
             return true;

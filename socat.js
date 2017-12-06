@@ -11,6 +11,7 @@ function printUsageAndExit(exitCode = 0)
 Usage:  socat.js <connection1> <connection2>
         socat.js <connection1> <connection2> [sniff1]
         socat.js <connection1> <connection2> [sniff1] [sniff2]
+        socat.js listserial
 
 Where "connection1" and "connection2" are specified by a string of the form "type:details".
 Below are valid strings for "type" and "details":
@@ -26,6 +27,8 @@ are specified by a string, like the connections, of the form: "conn:type:details
     1           as above    as above
     2
 
+When using the "listserial" command, the program will print all serial ports available to the system.
+Use one of the printed strings as the "portname" when using serial connections.
 
 
 `);
@@ -240,12 +243,41 @@ class IpClientConnection extends Connection {
 class SerialConnection extends Connection {
     constructor(portname, baudrate) {
         super();
-        let connection = initialize_serialport(this.buffer, portname, baudrate);
+        let connection = new serialport(portname, {baudRate: baudrate, autoOpen: true}, (err) => {
+            if (err) {
+                console.log("failed to open serial port");
+                console.dir(err);
+            }
+        });
+    
+        connection.on("data", (buf) => {
+            this.buffer = Buffer.concat([this.buffer, Buffer.from(buf, "binary")]);
+            //console.log(`received serial: ${serial_in.length} bytes`);
+        });
+        connection.on("open", () => {
+            console.log("serialport open");
+        });
+        connection.on("close", () => {
+            console.log("serialport close");
+        });
+        connection.on("error", (err) => {
+            console.log("serialport error");
+            console.dir(args);
+        });
+        connection.on("disconnect", (err) => {
+            console.log("serialport disconnect");
+            console.dir(args);
+        });
+        
         this.connection = connection;
     }
 
     get canWrite() {
         return true;
+    }
+
+    write(buffer) {
+        this.connection.write(buffer);
     }
 }
 
@@ -427,14 +459,52 @@ if (noArgs)
 }
 else
 {
-    let conn_list = parseArgsToConnections(argv._);
+    //console.log(`arguments: ${JSON.stringify(argv._)}`);
 
-    let conn1 = conn_list[0];
-    let conn2 = conn_list[1];
-    let sniff1 = conn_list[2];
-    let sniff2 = conn_list[3];
+    if (argv._.length == 1)
+    {
+        // check we want to list serialports
+        if (argv._[0] == "listserial")
+        {
+            serialport.list( (err, ports) => {
+                if (err)
+                {
+                    console.log(`Error listing serial ports: ${JSON.stringify(err)}`);
+                    process.exit(1);
+                }
+
+                if (ports)
+                {
+                    let names = [];
+                    ports.forEach( (port) => {
+                        names.push(port.comName);
+                    });
+                    console.log(`Available serial ports:`);
+                    names.forEach((name) => {
+                        console.log(`\t${name}`);
+                    })
+
+
+                }
+            });
+        }
+        else
+        {
+            console.log(`Invalid argument supplied: ${argv._[0]}`);
+            printUsageAndExit();
+        }
+    }
+    else
+    {
+        let conn_list = parseArgsToConnections(argv._);
+        
+        let conn1 = conn_list[0];
+        let conn2 = conn_list[1];
+        let sniff1 = conn_list[2];
+        let sniff2 = conn_list[3];
+        
+        //console.dir(conn_list);
     
-    //console.dir(conn_list);
-
-    mainLoop(conn1, conn2, sniff1, sniff2);
+        mainLoop(conn1, conn2, sniff1, sniff2);
+    }
 }
